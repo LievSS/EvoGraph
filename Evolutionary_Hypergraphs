@@ -1,22 +1,225 @@
-from hypergraph import Hypergraph, Node
-from dna import SpeciesA, SpeciesB, EnergySource
+import csv
 import random
-from config import config
+import math
+from abc import ABC, abstractmethod
 
-def main():
-        # Initialize the hypergraph and run evolution
-    hypergraph = Hypergraph()
-    nodes = [Node(i, SpeciesA(random.uniform(*config["interaction_strength_range"]), random.uniform(*config["mutation_rate_range"]), 0, 0.5)) if i % 2 == 0 else Node(i, SpeciesB(random.uniform(*config["interaction_strength_range"]), random.uniform(*config["mutation_rate_range"]), 1, 0.5)) for i in range(10)]
+
+# Configuration dictionary for flexible parameter settings
+config = {
+    "global_mutation_rate": 0.1,
+    "interaction_strength_range": (0.1, 1.5),
+    "mutation_rate_range": (0.1, 0.9),
+    "energy_threshold": 10,
+    "environment_energy": 5,  # Environmental factor for energy regeneration
+    "oscillatory_mutation": True,  # Enable oscillatory mutation model
+    "log_file": "evolution_data.csv"  # Output log file
+}
+
+class DataLogger:
+    # Logs evolutionary data at each generation.
+
+    def __init__(self, filename):
+        self.filename = filename
+        with open(self.filename, mode="w", newline="") as file:
+            writer = csv.writer(file)
+            writer.writerow(["Generation", "Node_ID", "Species_Type", "Mutation_Rate", "Interaction_Strength", "Fitness", "Energy", "Activation_Level"])
+
+    def log(self, generation, node):
+        # Log node data at a given generation.
+        with open(self.filename, mode="a", newline="") as file:
+            writer = csv.writer(file)
+            writer.writerow([
+                generation,
+                node.id,
+                node.dna.species_type,
+                node.dna.mutation_rate,
+                node.dna.interaction_strength,
+                node.fitness,
+                node.energy,
+                node.activation_level  # New metric
+            ])
+
+# Base class for Node DNA
+class NodeDNA(ABC):
+    def __init__(self, interaction_strength, mutation_rate, state, activation_threshold, energy=100):
+        self.interaction_strength = interaction_strength
+        self.mutation_rate = mutation_rate
+        self.state = state  # Binary state for Cellular Automata (CA)
+        self.activation_threshold = activation_threshold  # For neural-like behavior
+        self.energy = energy  # Energy level for the node
+        self.mutation_direction = 1  # Used for oscillatory mutation
+
+    @abstractmethod
+    def mutate(self):
+        # Base mutation operation to be defined by subclasses.
+        pass
+
+# Species A with Adaptive Mutation
+class SpeciesA(NodeDNA):
+    def __init__(self, interaction_strength, mutation_rate, state, activation_threshold):
+        super().__init__(interaction_strength, mutation_rate, state, activation_threshold)
+        self.species_type = 'A'
+
+    def mutate(self):
+        # Species A has a higher mutation rate but consumes more energy.
+        if config["oscillatory_mutation"]:
+            if self.mutation_rate >= config["mutation_rate_range"][1] or self.mutation_rate <= config["mutation_rate_range"][0]:
+                self.mutation_direction *= -1  # Reverse direction
+            self.mutation_rate += 0.02 * self.mutation_direction
+
+        if self.energy > 15 and random.random() < self.mutation_rate:
+            self.interaction_strength += random.uniform(-0.2, 0.2)  # Larger mutation steps
+            self.state = (self.state + random.choice([-1, 1])) % 2
+            self.activation_threshold += random.uniform(-0.2, 0.2)
+            self.energy -= 15  # Higher energy cost for mutation
+        print(f"{self.species_type} Mutate: Energy={self.energy}, Mutation Rate={self.mutation_rate}")
+
+# Species B with Adaptive Mutation based on energy
+class SpeciesB(NodeDNA):
+    def __init__(self, interaction_strength, mutation_rate, state, activation_threshold):
+        super().__init__(interaction_strength, mutation_rate, state, activation_threshold)
+        self.species_type = 'B'
+
+    def mutate(self):
+        # Species B has a lower mutation rate but is more energy efficient.
+        if self.energy < 50:
+            self.mutation_rate = min(self.mutation_rate + 0.01, config["mutation_rate_range"][1])
+        else:
+            self.mutation_rate = max(self.mutation_rate - 0.01, config["mutation_rate_range"][0])
+
+        if self.energy > 5 and random.random() < (self.mutation_rate / 2):  # Mutates less frequently
+            self.interaction_strength += random.uniform(-0.05, 0.05)  # Smaller mutation steps
+            self.state = (self.state + random.choice([-1, 1])) % 2
+            self.energy -= 5  # Lower energy cost
+        print(f"{self.species_type} Mutate: Energy={self.energy}, Mutation Rate={self.mutation_rate}")
+
+# Base class for nodes
+class Node:
+    def __init__(self, id, dna):
+        self.id = id
+        self.dna = dna  # Node's DNA, either SpeciesA or SpeciesB
+        self.activation_level = 0  # Neural-inspired activation level
+        self.fitness = 1  # Fitness score
+        self.energy = self.dna.energy  # Start with the DNA's energy level
+        self.energy_sources = []  # List to track energy sources
+
+    def add_energy_source(self, source):
+        # Add an energy source for the node to interact with.
+        self.energy_sources.append(source)
+
+    def interact_with_energy_sources(self):
+        # Interact with energy sources to replenish energy.
+        for source in self.energy_sources:
+            if source.energy > 0:
+                self.energy += source.energy_replenishment
+                source.energy -= source.energy_replenishment  # Decrease source energy
+                print(f"Node {self.id} interacted with {source.id} and gained energy.")
+
+    def interact(self, neighbors, weights):
+        # Interact with neighboring nodes based on weighted connections, energy cost.
+        if self.energy > config["energy_threshold"]:  # Interaction requires energy
+            avg_neighbor_strength = sum(neighbor.dna.interaction_strength for neighbor in neighbors) / len(neighbors)
+            self.dna.interaction_strength = (self.dna.interaction_strength + avg_neighbor_strength) / 2
+
+            weighted_sum = sum(neighbor.dna.interaction_strength * weights.get(neighbor.id, 1) for neighbor in neighbors)
+            self.activation_level = self.activation_function(weighted_sum)
+            self.energy -= config["energy_threshold"]  # Energy cost for interacting
+        print(f"Node {self.id} Interaction: Activation Level={self.activation_level}, Energy={self.energy}")
+
+    def activation_function(self, input_sum):
+        # Sigmoid activation function, common in neural networks.
+        return 1 / (1 + math.exp(-input_sum + self.dna.activation_threshold))
+
+    def receive_feedback(self, success):
+        # Adjust node's behavior based on feedback, with energy reward or penalty.
+        feedback_factor = 1.1 if success else 0.9
+        self.dna.mutation_rate *= feedback_factor
+        self.fitness *= feedback_factor
+        self.energy += 20 if success else -10  # Gain or lose energy based on feedback
+        print(f"Node {self.id} Feedback: Mutation Rate={self.dna.mutation_rate}, Fitness={self.fitness}, Energy={self.energy}")
+
+    def regenerate_energy(self):
+        # Energy replenishment, based on environmental factors.
+        self.energy = min(self.energy + config["environment_energy"], 100)  # Regenerate a small amount of energy each cycle, capped at 100
+
+# Energy Source class
+class EnergySource:
+    def __init__(self, id, energy_replenishment):
+        self.id = id
+        self.energy = 100  # Starting energy level
+        self.energy_replenishment = energy_replenishment  # Amount to replenish per interaction
+
+# Hypergraph class
+class Hypergraph:
+    def __init__(self):
+        self.nodes = []
+        self.hyperedges = {
+            "cooperative": [],
+            "competitive": []
+        }
+        self.hyperedge_weights = {}
+        self.global_mutation_rate = config["global_mutation_rate"]
+        self.logger = DataLogger(config["log_file"])
+
+    def add_node(self, node):
+        # Add a node to the hypergraph.
+        self.nodes.append(node)
+
+    def form_new_hyperedge(self, nodes, interaction_type):
+        # Create a new hyperedge with weighted connections between nodes.
+        self.hyperedges[interaction_type].append(nodes)
+        self.hyperedge_weights[tuple(node.id for node in nodes)] = {
+            node.id: random.uniform(config["interaction_strength_range"][0], config["interaction_strength_range"][1]) for node in nodes
+        }
+
+    def evolve_hyperedges(self):
+        # Recreate hyperedges if any node's DNA changes significantly.
+        for interaction_type, hyperedges in self.hyperedges.items():
+            new_hyperedges = []
+            for hyperedge in hyperedges:
+                if any(node.dna.mutation_rate > 0.5 for node in hyperedge):
+                    self.form_new_hyperedge(hyperedge, interaction_type)  # Recreate the hyperedge
+                else:
+                    new_hyperedges.append(hyperedge)  # Retain unchanged hyperedges
+            self.hyperedges[interaction_type] = new_hyperedges  # Update the hyperedges list
+
+    def evolve(self, generations=10):
+        # Run the evolutionary process with energy dynamics.
+        for gen in range(generations):
+            print(f"Generation {gen}")
+            selected_nodes = self.nodes[:]
+
+            # Log initial state of nodes
+            for node in selected_nodes:
+                self.logger.log(gen, node)
+
+            for node in selected_nodes:
+                node.dna.mutate()
+                node.regenerate_energy()  # Regenerate energy at the start of each generation
+                node.interact(selected_nodes, self.hyperedge_weights)
+
+            # Check for feedback and adjust nodes
+            for node in selected_nodes:
+                success = random.choice([True, False])  # Simulate feedback for the example
+                node.receive_feedback(success)
+
+            # Recreate hyperedges based on mutations
+            self.evolve_hyperedges()
+
+            # Print node states for debugging
+            for node in selected_nodes:
+                print(f"Node {node.id}: Energy={node.energy}, Activation Level={node.activation_level}")
+
+# Initialize the hypergraph and run evolution
+hypergraph = Hypergraph()
+nodes = [Node(i, SpeciesA(random.uniform(*config["interaction_strength_range"]), random.uniform(*config["mutation_rate_range"]), 0, 0.5)) if i % 2 == 0 else Node(i, SpeciesB(random.uniform(*config["interaction_strength_range"]), random.uniform(*config["mutation_rate_range"]), 1, 0.5)) for i in range(10)]
+for node in nodes:
+    hypergraph.add_node(node)
+
+# Add energy sources
+energy_sources = [EnergySource(i, random.uniform(5, 15)) for i in range(3)]
+for source in energy_sources:
     for node in nodes:
-        hypergraph.add_node(node)
+        node.add_energy_source(source)  # Associate energy sources with nodes
 
-    # Add energy sources
-    energy_sources = [EnergySource(i, random.uniform(5, 15)) for i in range(3)]
-    for source in energy_sources:
-        for node in nodes:
-            node.add_energy_source(source)  # Associate energy sources with nodes
-
-    hypergraph.evolve(generations=10)  # Evolve the hypergraph for 10 generations
-
-main()
-
+hypergraph.evolve(generations=10)  # Evolve the hypergraph for 10 generations
