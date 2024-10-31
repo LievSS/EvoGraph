@@ -1,0 +1,63 @@
+from abc import ABC, abstractmethod
+from config import config
+import random
+
+# Base class for Node DNA
+class NodeDNA(ABC):
+    def __init__(self, interaction_strength, mutation_rate, state, activation_threshold, energy=100):
+        self.interaction_strength = interaction_strength
+        self.mutation_rate = mutation_rate
+        self.state = state  # Binary state for Cellular Automata (CA)
+        self.activation_threshold = activation_threshold  # For neural-like behavior
+        self.energy = energy  # Energy level for the node
+        self.mutation_direction = 1  # Used for oscillatory mutation
+
+    @abstractmethod
+    def mutate(self):
+        # Base mutation operation to be defined by subclasses.
+        pass
+
+# Species A with Adaptive Mutation
+class SpeciesA(NodeDNA):
+    def __init__(self, interaction_strength, mutation_rate, state, activation_threshold):
+        super().__init__(interaction_strength, mutation_rate, state, activation_threshold)
+        self.species_type = 'A'
+
+    def mutate(self):
+        # Species A has a higher mutation rate but consumes more energy.
+        if config["oscillatory_mutation"]:
+            if self.mutation_rate >= config["mutation_rate_range"][1] or self.mutation_rate <= config["mutation_rate_range"][0]:
+                self.mutation_direction *= -1  # Reverse direction
+            self.mutation_rate += 0.02 * self.mutation_direction
+
+        if self.energy > 15 and random.random() < self.mutation_rate:
+            self.interaction_strength += random.uniform(-0.2, 0.2)  # Larger mutation steps
+            self.state = (self.state + random.choice([-1, 1])) % 2
+            self.activation_threshold += random.uniform(-0.2, 0.2)
+            self.energy -= 15  # Higher energy cost for mutation
+        print(f"{self.species_type} Mutate: Energy={self.energy}, Mutation Rate={self.mutation_rate}")
+
+# Species B with Adaptive Mutation based on energy
+class SpeciesB(NodeDNA):
+    def __init__(self, interaction_strength, mutation_rate, state, activation_threshold):
+        super().__init__(interaction_strength, mutation_rate, state, activation_threshold)
+        self.species_type = 'B'
+
+    def mutate(self):
+        # Species B has a lower mutation rate but is more energy efficient.
+        if self.energy < 50:
+            self.mutation_rate = min(self.mutation_rate + 0.01, config["mutation_rate_range"][1])
+        else:
+            self.mutation_rate = max(self.mutation_rate - 0.01, config["mutation_rate_range"][0])
+
+        if self.energy > 5 and random.random() < (self.mutation_rate / 2):  # Mutates less frequently
+            self.interaction_strength += random.uniform(-0.05, 0.05)  # Smaller mutation steps
+            self.state = (self.state + random.choice([-1, 1])) % 2
+            self.energy -= 5  # Lower energy cost
+        print(f"{self.species_type} Mutate: Energy={self.energy}, Mutation Rate={self.mutation_rate}")
+# Energy Source class
+class EnergySource:
+    def __init__(self, id, energy_replenishment):
+        self.id = id
+        self.energy = 100  # Starting energy level
+        self.energy_replenishment = energy_replenishment  # Amount to replenish per interaction
